@@ -473,11 +473,44 @@ function animateMask(deg, done) {
 }
 
 // ---------- Audio ----------
-let sampler = null, synth = null, samplerReady = false;
+let sampler = null, synth = null, samplerReady = false, silentEl = null;
+
+// A tiny silent WAV (8 kHz, 8-bit mono, 0.1 s).
+function silentWavUrl() {
+  const n = 800, buf = new ArrayBuffer(44 + n), v = new DataView(buf);
+  const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); v.setUint32(4, 36 + n, true); str(8, 'WAVEfmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+  str(36, 'data'); v.setUint32(40, n, true);
+  for (let i = 0; i < n; i++) v.setUint8(44 + i, 128);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+// iOS Safari mutes Web Audio while the silent switch is on. Declaring a "playback" audio session
+// (Safari 17+) or playing an <audio> element moves the page into the media channel, which is not muted.
+// Must run synchronously inside a user gesture.
+function unlockIOSAudio() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* unsupported */ }
+  if (!silentEl) {
+    silentEl = document.createElement('audio');
+    silentEl.setAttribute('playsinline', '');
+    silentEl.setAttribute('x-webkit-airplay', 'deny');
+    silentEl.loop = true;
+    silentEl.src = silentWavUrl();
+  }
+  if (silentEl.paused && document.visibilityState === 'visible') silentEl.play().catch(() => {});
+}
+document.addEventListener('visibilitychange', () => {
+  if (silentEl && document.visibilityState === 'hidden') silentEl.pause();
+});
 
 async function ensureAudio() {
   if (typeof Tone === 'undefined') return false;
-  await Tone.start();
+  unlockIOSAudio();
+  const start = Tone.start();
+  if (Tone.context.state !== 'running') Tone.context.resume();
+  await start;
   if (!sampler) {
     const urls = {};
     ['A0', 'C1', 'D#1', 'F#1', 'A1', 'C2', 'D#2', 'F#2', 'A2', 'C3', 'D#3', 'F#3', 'A3',
@@ -634,6 +667,9 @@ $('#order').addEventListener('change', e => { state.order = e.target.value; rend
 $('#up').addEventListener('click', () => transpose(1));
 $('#down').addEventListener('click', () => transpose(-1));
 $('#helpBtn').addEventListener('click', () => $('#help').showModal());
+// Unlock audio and start loading piano samples on the first tap anywhere, so ▶ is ready when pressed.
+const warmAudio = () => { ensureAudio(); ['touchend', 'click'].forEach(ev => document.removeEventListener(ev, warmAudio, true)); };
+['touchend', 'click'].forEach(ev => document.addEventListener(ev, warmAudio, true));
 
 renderAll();
 
